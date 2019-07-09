@@ -1,0 +1,34 @@
+core.workflow(
+    name = "llvm_gwp_asan_sync_to_gob",
+    origin = git.origin(
+        url = "https://github.com/llvm/llvm-project.git",
+        ref = "master",
+    ),
+    origin_files = glob([
+        "compiler-rt/lib/gwp_asan/**",
+        "compiler-rt/LICENSE.TXT",
+    ]),
+    destination = git.gerrit_destination(
+        url = "rpc://team/dynamic-tools/gwp-asan",
+        fetch = "master",
+        submit = True,
+    ),
+    mode = "ITERATIVE",
+    authoring = authoring.pass_thru(
+        "Dynamic Tools Team <dynamic-tools@google.com>"
+    ),
+    transformations = [
+        core.move("compiler-rt/lib/gwp_asan/", ""),
+        core.move("compiler-rt/LICENSE.TXT", "LICENSE.TXT"),
+    ],
+)
+
+service.migration(
+    migration_name = "llvm_gwp_asan_sync_to_gob",
+    owner_mdb = "dynamic-tools",
+    contact_email = "dynamic-tools@google.com",
+    notifications = service.notifications(
+        on_error = [service.email(address = 'mitchp@google.com')]
+    ),
+    state = 'ACTIVE',
+)

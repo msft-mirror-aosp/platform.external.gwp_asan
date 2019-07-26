@@ -14,8 +14,8 @@ description:
 third_party {
   url {
     type: GIT
-    value: "rpc://team/dynamic-tools/gwp-asan"
+    value: "https://github.com/llvm/llvm-project.git"
   }
-  version: "HEAD"
-  last_upgrade_date { year: 2019 month: 7 day: 9 }
+  version: "b157dcacb5b96fd64900906911832a8ac3bb189e"
+  last_upgrade_date { year: 2019 month: 7 day: 26 }
 }

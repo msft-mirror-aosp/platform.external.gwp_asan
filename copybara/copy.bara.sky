@@ -17,6 +17,15 @@ core.workflow(
         url = "rpc://team/dynamic-tools/gwp-asan",
         fetch = "master",
     ),
+    destination_files = glob(
+        [
+            "gwp_asan/**",
+            "LICENSE.TXT",
+        ],
+        exclude = [
+            "**/Android.bp"
+        ],
+    ),
     mode = "ITERATIVE",
     authoring = authoring.pass_thru(
         "Dynamic Tools Team <dynamic-tools@google.com>"

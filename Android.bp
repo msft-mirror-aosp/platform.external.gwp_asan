@@ -108,6 +108,10 @@ cc_library {
         "gwp_asan/platform_specific/utilities_posix.cpp",
         "gwp_asan/stack_trace_compressor.cpp",
     ],
+    apex_available: [
+        "//apex_available:platform",
+        "com.android.runtime",
+    ],
 }
 
 cc_fuzz {
@@ -141,4 +145,8 @@ cc_test {
     include_dirs: ["bionic/libc/async_safe/include"],
     test_suites: ["general-tests"],
     cflags: ["-fno-emulated-tls"],
+
+    // Late initialisation tests should run isolated, as the platform IE TLS
+    // PRNG should be initialised to its default state.
+    isolated: true,
 }

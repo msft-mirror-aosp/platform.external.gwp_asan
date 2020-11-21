@@ -1,4 +1,4 @@
-//===-- common_posix.cpp ----------------------------------------*- C++ -*-===//
+//===-- mutex_fuchsia.h -----------------------------------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,19 +6,18 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "gwp_asan/common.h"
+#if defined(__Fuchsia__)
+#ifndef GWP_ASAN_MUTEX_FUCHSIA_H_
+#define GWP_ASAN_MUTEX_FUCHSIA_H_
 
-#include <sys/syscall.h>
-#include <unistd.h>
+#include <lib/sync/mutex.h>
 
 namespace gwp_asan {
-
-uint64_t getThreadID() {
-#ifdef SYS_gettid
-  return syscall(SYS_gettid);
-#else
-  return kInvalidThreadID;
-#endif
-}
-
+class PlatformMutex {
+protected:
+  sync_mutex_t Mu = {};
+};
 } // namespace gwp_asan
+
+#endif // GWP_ASAN_MUTEX_FUCHSIA_H_
+#endif // defined(__Fuchsia__)

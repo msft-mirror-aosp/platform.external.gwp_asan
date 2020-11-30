@@ -18,9 +18,11 @@ cc_defaults {
     name: "gwp_asan_defaults",
     host_supported: true,
     vendor_available: true,
+    product_available: true,
     recovery_available: true,
     native_bridge_supported: true,
     ramdisk_available: true,
+    vendor_ramdisk_available: true,
 
     // GWP-ASan currently has no support for darwin.
     target: {
@@ -56,8 +58,8 @@ cc_library_headers {
         "//apex_available:platform",
         "com.android.runtime",
         // GWP-ASan headers are currently referenced by the following additional APEXes
+        "com.android.art",
         "com.android.art.debug",
-        "com.android.art.release",
         "com.android.media",
         "com.android.media.swcodec",
     ],
@@ -78,8 +80,8 @@ cc_library_static {
         "gwp_asan/platform_specific/guarded_pool_allocator_posix.cpp",
         "gwp_asan/platform_specific/mutex_posix.cpp",
         "gwp_asan/platform_specific/utilities_posix.cpp",
-        "gwp_asan/random.cpp",
         "gwp_asan/stack_trace_compressor.cpp",
+        "gwp_asan/utilities.cpp"
     ],
     // GWP-ASan requires platform (non-emulated) TLS. We use thread local
     // variables in the core, inlined interface to GWP-ASan.
@@ -136,7 +138,7 @@ cc_test {
         "gwp_asan_crash_handler",
         "libasync_safe",
         "liblog",
-        "libunwindstack",
+        "libunwindstack_no_dex",
         "liblzma", // Dependency from libunwindstack.
     ],
     shared_libs: [

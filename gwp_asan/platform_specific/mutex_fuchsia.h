@@ -1,4 +1,4 @@
-//===-- harness.cpp ---------------------------------------------*- C++ -*-===//
+//===-- mutex_fuchsia.h -----------------------------------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,13 +6,18 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "gwp_asan/tests/harness.h"
+#if defined(__Fuchsia__)
+#ifndef GWP_ASAN_MUTEX_FUCHSIA_H_
+#define GWP_ASAN_MUTEX_FUCHSIA_H_
+
+#include <lib/sync/mutex.h>
 
 namespace gwp_asan {
-namespace test {
-bool OnlyOnce() {
-  static int x = 0;
-  return !x++;
-}
-} // namespace test
+class PlatformMutex {
+protected:
+  sync_mutex_t Mu = {};
+};
 } // namespace gwp_asan
+
+#endif // GWP_ASAN_MUTEX_FUCHSIA_H_
+#endif // defined(__Fuchsia__)

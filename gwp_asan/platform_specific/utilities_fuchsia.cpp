@@ -1,4 +1,4 @@
-//===-- harness.cpp ---------------------------------------------*- C++ -*-===//
+//===-- utilities_fuchsia.cpp -----------------------------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,13 +6,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "gwp_asan/tests/harness.h"
+#include "gwp_asan/utilities.h"
+
+#include <string.h>
+#include <zircon/sanitizer.h>
 
 namespace gwp_asan {
-namespace test {
-bool OnlyOnce() {
-  static int x = 0;
-  return !x++;
+void die(const char *Message) {
+  __sanitizer_log_write(Message, strlen(Message));
+  __builtin_trap();
 }
-} // namespace test
 } // namespace gwp_asan

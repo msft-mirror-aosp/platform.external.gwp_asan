@@ -71,12 +71,7 @@ cc_defaults {
 
     // GWP-ASan is used by bionic libc, and should have no libc/libc++
     // dependencies.
-    target: {
-        bionic: {
-            system_shared_libs: [],
-            header_libs: ["libc_headers"],
-        },
-    },
+    system_shared_libs: [],
     stl: "none",
 }
 
@@ -109,6 +104,7 @@ cc_library_static {
     defaults: ["gwp_asan_no_libs_defaults"],
     header_libs: [
         "gwp_asan_headers",
+        "libc_headers", // Required for pthread.h in mutex.h.
     ],
     srcs: [
         "gwp_asan/common.cpp",
@@ -143,6 +139,7 @@ cc_library {
     defaults: ["gwp_asan_defaults"],
     header_libs: [
         "gwp_asan_headers",
+        "libc_headers", // Required for assert.h
     ],
     srcs: [
         "gwp_asan/common.cpp",

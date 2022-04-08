@@ -1,18 +1,7 @@
 {
   "presubmit": [
     {
-      "name": "CtsGwpAsanTestCases"
-    },
-    {
-      "name": "debuggerd_test"
-    },
-    {
       "name": "gwp_asan_unittest"
-    }
-  ],
-  "imports": [
-    {
-      "path": "bionic"
     }
   ]
 }

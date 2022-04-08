@@ -8,11 +8,24 @@
 
 #include "gwp_asan/guarded_pool_allocator.h"
 
+#include "gwp_asan/optional/segv_handler.h"
 #include "gwp_asan/options.h"
+#include "gwp_asan/random.h"
 #include "gwp_asan/utilities.h"
 
+// RHEL creates the PRIu64 format macro (for printing uint64_t's) only when this
+// macro is defined before including <inttypes.h>.
+#ifndef __STDC_FORMAT_MACROS
+#define __STDC_FORMAT_MACROS 1
+#endif
+
 #include <assert.h>
-#include <stddef.h>
+#include <inttypes.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
 
 using AllocationMetadata = gwp_asan::AllocationMetadata;
 using Error = gwp_asan::Error;
@@ -26,15 +39,14 @@ namespace {
 // init-order-fiasco.
 GuardedPoolAllocator *SingletonPtr = nullptr;
 
-size_t roundUpTo(size_t Size, size_t Boundary) {
-  return (Size + Boundary - 1) & ~(Boundary - 1);
-}
+class ScopedBoolean {
+public:
+  ScopedBoolean(bool &B) : Bool(B) { Bool = true; }
+  ~ScopedBoolean() { Bool = false; }
 
-uintptr_t getPageAddr(uintptr_t Ptr, uintptr_t PageSize) {
-  return Ptr & ~(PageSize - 1);
-}
-
-bool isPowerOfTwo(uintptr_t X) { return (X & (X - 1)) == 0; }
+private:
+  bool &Bool;
+};
 } // anonymous namespace
 
 // Gets the singleton implementation of this class. Thread-compatible until
@@ -52,7 +64,7 @@ void GuardedPoolAllocator::init(const options::Options &Opts) {
     return;
 
   Check(Opts.SampleRate >= 0, "GWP-ASan Error: SampleRate is < 0.");
-  Check(Opts.SampleRate < (1 << 30), "GWP-ASan Error: SampleRate is >= 2^30.");
+  Check(Opts.SampleRate <= INT32_MAX, "GWP-ASan Error: SampleRate is > 2^31.");
   Check(Opts.MaxSimultaneousAllocations >= 0,
         "GWP-ASan Error: MaxSimultaneousAllocations is < 0.");
 
@@ -61,27 +73,25 @@ void GuardedPoolAllocator::init(const options::Options &Opts) {
 
   State.MaxSimultaneousAllocations = Opts.MaxSimultaneousAllocations;
 
-  const size_t PageSize = getPlatformPageSize();
-  // getPageAddr() and roundUpTo() assume the page size to be a power of 2.
-  assert((PageSize & (PageSize - 1)) == 0);
-  State.PageSize = PageSize;
+  State.PageSize = getPlatformPageSize();
+
+  PerfectlyRightAlign = Opts.PerfectlyRightAlign;
 
   size_t PoolBytesRequired =
-      PageSize * (1 + State.MaxSimultaneousAllocations) +
+      State.PageSize * (1 + State.MaxSimultaneousAllocations) +
       State.MaxSimultaneousAllocations * State.maximumAllocationSize();
-  assert(PoolBytesRequired % PageSize == 0);
-  void *GuardedPoolMemory = reserveGuardedPool(PoolBytesRequired);
+  void *GuardedPoolMemory = mapMemory(PoolBytesRequired, kGwpAsanGuardPageName);
 
-  size_t BytesRequired =
-      roundUpTo(State.MaxSimultaneousAllocations * sizeof(*Metadata), PageSize);
+  size_t BytesRequired = State.MaxSimultaneousAllocations * sizeof(*Metadata);
   Metadata = reinterpret_cast<AllocationMetadata *>(
-      map(BytesRequired, kGwpAsanMetadataName));
+      mapMemory(BytesRequired, kGwpAsanMetadataName));
+  markReadWrite(Metadata, BytesRequired, kGwpAsanMetadataName);
 
   // Allocate memory and set up the free pages queue.
-  BytesRequired = roundUpTo(
-      State.MaxSimultaneousAllocations * sizeof(*FreeSlots), PageSize);
-  FreeSlots =
-      reinterpret_cast<size_t *>(map(BytesRequired, kGwpAsanFreeSlotsName));
+  BytesRequired = State.MaxSimultaneousAllocations * sizeof(*FreeSlots);
+  FreeSlots = reinterpret_cast<size_t *>(
+      mapMemory(BytesRequired, kGwpAsanFreeSlotsName));
+  markReadWrite(FreeSlots, BytesRequired, kGwpAsanFreeSlotsName);
 
   // Multiply the sample rate by 2 to give a good, fast approximation for (1 /
   // SampleRate) chance of sampling.
@@ -91,9 +101,8 @@ void GuardedPoolAllocator::init(const options::Options &Opts) {
     AdjustedSampleRatePlusOne = 2;
 
   initPRNG();
-  getThreadLocals()->NextSampleCounter =
-      ((getRandomUnsigned32() % (AdjustedSampleRatePlusOne - 1)) + 1) &
-      ThreadLocalPackedVariables::NextSampleCounterMask;
+  ThreadLocals.NextSampleCounter =
+      (getRandomUnsigned32() % (AdjustedSampleRatePlusOne - 1)) + 1;
 
   State.GuardedPagePool = reinterpret_cast<uintptr_t>(GuardedPoolMemory);
   State.GuardedPagePoolEnd =
@@ -103,15 +112,9 @@ void GuardedPoolAllocator::init(const options::Options &Opts) {
     installAtFork();
 }
 
-void GuardedPoolAllocator::disable() {
-  PoolMutex.lock();
-  BacktraceMutex.lock();
-}
+void GuardedPoolAllocator::disable() { PoolMutex.lock(); }
 
-void GuardedPoolAllocator::enable() {
-  PoolMutex.unlock();
-  BacktraceMutex.unlock();
-}
+void GuardedPoolAllocator::enable() { PoolMutex.unlock(); }
 
 void GuardedPoolAllocator::iterate(void *Base, size_t Size, iterate_callback Cb,
                                    void *Arg) {
@@ -120,96 +123,48 @@ void GuardedPoolAllocator::iterate(void *Base, size_t Size, iterate_callback Cb,
     const AllocationMetadata &Meta = Metadata[i];
     if (Meta.Addr && !Meta.IsDeallocated && Meta.Addr >= Start &&
         Meta.Addr < Start + Size)
-      Cb(Meta.Addr, Meta.RequestedSize, Arg);
+      Cb(Meta.Addr, Meta.Size, Arg);
   }
 }
 
 void GuardedPoolAllocator::uninitTestOnly() {
   if (State.GuardedPagePool) {
-    unreserveGuardedPool();
+    unmapMemory(reinterpret_cast<void *>(State.GuardedPagePool),
+                State.GuardedPagePoolEnd - State.GuardedPagePool,
+                kGwpAsanGuardPageName);
     State.GuardedPagePool = 0;
     State.GuardedPagePoolEnd = 0;
   }
   if (Metadata) {
-    unmap(Metadata,
-          roundUpTo(State.MaxSimultaneousAllocations * sizeof(*Metadata),
-                    State.PageSize));
+    unmapMemory(Metadata, State.MaxSimultaneousAllocations * sizeof(*Metadata),
+                kGwpAsanMetadataName);
     Metadata = nullptr;
   }
   if (FreeSlots) {
-    unmap(FreeSlots,
-          roundUpTo(State.MaxSimultaneousAllocations * sizeof(*FreeSlots),
-                    State.PageSize));
+    unmapMemory(FreeSlots,
+                State.MaxSimultaneousAllocations * sizeof(*FreeSlots),
+                kGwpAsanFreeSlotsName);
     FreeSlots = nullptr;
   }
-  *getThreadLocals() = ThreadLocalPackedVariables();
 }
 
-// Note, minimum backing allocation size in GWP-ASan is always one page, and
-// each slot could potentially be multiple pages (but always in
-// page-increments). Thus, for anything that requires less than page size
-// alignment, we don't need to allocate extra padding to ensure the alignment
-// can be met.
-size_t GuardedPoolAllocator::getRequiredBackingSize(size_t Size,
-                                                    size_t Alignment,
-                                                    size_t PageSize) {
-  assert(isPowerOfTwo(Alignment) && "Alignment must be a power of two!");
-  assert(Alignment != 0 && "Alignment should be non-zero");
-  assert(Size != 0 && "Size should be non-zero");
-
-  if (Alignment <= PageSize)
-    return Size;
-
-  return Size + Alignment - PageSize;
+static uintptr_t getPageAddr(uintptr_t Ptr, uintptr_t PageSize) {
+  return Ptr & ~(PageSize - 1);
 }
 
-uintptr_t GuardedPoolAllocator::alignUp(uintptr_t Ptr, size_t Alignment) {
-  assert(isPowerOfTwo(Alignment) && "Alignment must be a power of two!");
-  assert(Alignment != 0 && "Alignment should be non-zero");
-  if ((Ptr & (Alignment - 1)) == 0)
-    return Ptr;
-
-  Ptr += Alignment - (Ptr & (Alignment - 1));
-  return Ptr;
-}
-
-uintptr_t GuardedPoolAllocator::alignDown(uintptr_t Ptr, size_t Alignment) {
-  assert(isPowerOfTwo(Alignment) && "Alignment must be a power of two!");
-  assert(Alignment != 0 && "Alignment should be non-zero");
-  if ((Ptr & (Alignment - 1)) == 0)
-    return Ptr;
-
-  Ptr -= Ptr & (Alignment - 1);
-  return Ptr;
-}
-
-void *GuardedPoolAllocator::allocate(size_t Size, size_t Alignment) {
+void *GuardedPoolAllocator::allocate(size_t Size) {
   // GuardedPagePoolEnd == 0 when GWP-ASan is disabled. If we are disabled, fall
   // back to the supporting allocator.
-  if (State.GuardedPagePoolEnd == 0) {
-    getThreadLocals()->NextSampleCounter =
-        (AdjustedSampleRatePlusOne - 1) &
-        ThreadLocalPackedVariables::NextSampleCounterMask;
-    return nullptr;
-  }
-
-  if (Size == 0)
-    Size = 1;
-  if (Alignment == 0)
-    Alignment = alignof(max_align_t);
-
-  if (!isPowerOfTwo(Alignment) || Alignment > State.maximumAllocationSize() ||
-      Size > State.maximumAllocationSize())
-    return nullptr;
-
-  size_t BackingSize = getRequiredBackingSize(Size, Alignment, State.PageSize);
-  if (BackingSize > State.maximumAllocationSize())
+  if (State.GuardedPagePoolEnd == 0)
     return nullptr;
 
   // Protect against recursivity.
-  if (getThreadLocals()->RecursiveGuard)
+  if (ThreadLocals.RecursiveGuard)
     return nullptr;
-  ScopedRecursiveGuard SRG;
+  ScopedBoolean SB(ThreadLocals.RecursiveGuard);
+
+  if (Size == 0 || Size > State.maximumAllocationSize())
+    return nullptr;
 
   size_t Index;
   {
@@ -220,35 +175,27 @@ void *GuardedPoolAllocator::allocate(size_t Size, size_t Alignment) {
   if (Index == kInvalidSlotID)
     return nullptr;
 
-  uintptr_t SlotStart = State.slotToAddr(Index);
-  AllocationMetadata *Meta = addrToMetadata(SlotStart);
-  uintptr_t SlotEnd = State.slotToAddr(Index) + State.maximumAllocationSize();
-  uintptr_t UserPtr;
-  // Randomly choose whether to left-align or right-align the allocation, and
-  // then apply the necessary adjustments to get an aligned pointer.
-  if (getRandomUnsigned32() % 2 == 0)
-    UserPtr = alignUp(SlotStart, Alignment);
-  else
-    UserPtr = alignDown(SlotEnd - Size, Alignment);
-
-  assert(UserPtr >= SlotStart);
-  assert(UserPtr + Size <= SlotEnd);
+  uintptr_t Ptr = State.slotToAddr(Index);
+  // Should we right-align this allocation?
+  if (getRandomUnsigned32() % 2 == 0) {
+    AlignmentStrategy Align = AlignmentStrategy::DEFAULT;
+    if (PerfectlyRightAlign)
+      Align = AlignmentStrategy::PERFECT;
+    Ptr +=
+        State.maximumAllocationSize() - rightAlignedAllocationSize(Size, Align);
+  }
+  AllocationMetadata *Meta = addrToMetadata(Ptr);
 
   // If a slot is multiple pages in size, and the allocation takes up a single
   // page, we can improve overflow detection by leaving the unused pages as
   // unmapped.
-  const size_t PageSize = State.PageSize;
-  allocateInGuardedPool(
-      reinterpret_cast<void *>(getPageAddr(UserPtr, PageSize)),
-      roundUpTo(Size, PageSize));
+  markReadWrite(reinterpret_cast<void *>(getPageAddr(Ptr, State.PageSize)),
+                Size, kGwpAsanAliveSlotName);
 
-  Meta->RecordAllocation(UserPtr, Size);
-  {
-    ScopedLock UL(BacktraceMutex);
-    Meta->AllocationTrace.RecordBacktrace(Backtrace);
-  }
+  Meta->RecordAllocation(Ptr, Size);
+  Meta->AllocationTrace.RecordBacktrace(Backtrace);
 
-  return reinterpret_cast<void *>(UserPtr);
+  return reinterpret_cast<void *>(Ptr);
 }
 
 void GuardedPoolAllocator::trapOnAddress(uintptr_t Address, Error E) {
@@ -262,7 +209,7 @@ void GuardedPoolAllocator::trapOnAddress(uintptr_t Address, Error E) {
 }
 
 void GuardedPoolAllocator::stop() {
-  getThreadLocals()->RecursiveGuard = true;
+  ThreadLocals.RecursiveGuard = true;
   PoolMutex.tryLock();
 }
 
@@ -293,15 +240,14 @@ void GuardedPoolAllocator::deallocate(void *Ptr) {
 
     // Ensure that the unwinder is not called if the recursive flag is set,
     // otherwise non-reentrant unwinders may deadlock.
-    if (!getThreadLocals()->RecursiveGuard) {
-      ScopedRecursiveGuard SRG;
-      ScopedLock UL(BacktraceMutex);
+    if (!ThreadLocals.RecursiveGuard) {
+      ScopedBoolean B(ThreadLocals.RecursiveGuard);
       Meta->DeallocationTrace.RecordBacktrace(Backtrace);
     }
   }
 
-  deallocateInGuardedPool(reinterpret_cast<void *>(SlotStart),
-                          State.maximumAllocationSize());
+  markInaccessible(reinterpret_cast<void *>(SlotStart),
+                   State.maximumAllocationSize(), kGwpAsanGuardPageName);
 
   // And finally, lock again to release the slot back into the pool.
   ScopedLock L(PoolMutex);
@@ -313,7 +259,7 @@ size_t GuardedPoolAllocator::getSize(const void *Ptr) {
   ScopedLock L(PoolMutex);
   AllocationMetadata *Meta = addrToMetadata(reinterpret_cast<uintptr_t>(Ptr));
   assert(Meta->Addr == reinterpret_cast<uintptr_t>(Ptr));
-  return Meta->RequestedSize;
+  return Meta->Size;
 }
 
 AllocationMetadata *GuardedPoolAllocator::addrToMetadata(uintptr_t Ptr) const {
@@ -340,12 +286,7 @@ void GuardedPoolAllocator::freeSlot(size_t SlotIndex) {
   FreeSlots[FreeSlotsLength++] = SlotIndex;
 }
 
-uint32_t GuardedPoolAllocator::getRandomUnsigned32() {
-  uint32_t RandomState = getThreadLocals()->RandomState;
-  RandomState ^= RandomState << 13;
-  RandomState ^= RandomState >> 17;
-  RandomState ^= RandomState << 5;
-  getThreadLocals()->RandomState = RandomState;
-  return RandomState;
-}
+GWP_ASAN_TLS_INITIAL_EXEC
+GuardedPoolAllocator::ThreadLocalPackedVariables
+    GuardedPoolAllocator::ThreadLocals;
 } // namespace gwp_asan

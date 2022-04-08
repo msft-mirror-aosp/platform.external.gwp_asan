@@ -11,17 +11,10 @@
 
 #include <stdarg.h>
 
-#if defined(__Fuchsia__)
-#include <zxtest/zxtest.h>
-using Test = ::zxtest::Test;
-#else
 #include "gtest/gtest.h"
-using Test = ::testing::Test;
-#endif
 
 #include "gwp_asan/guarded_pool_allocator.h"
 #include "gwp_asan/optional/backtrace.h"
-#include "gwp_asan/optional/printf.h"
 #include "gwp_asan/optional/segv_handler.h"
 #include "gwp_asan/options.h"
 
@@ -31,7 +24,7 @@ namespace test {
 // their own signal-safe Printf function. In LLVM, we use
 // `optional/printf_sanitizer_common.cpp` which supplies the __sanitizer::Printf
 // for this purpose.
-Printf_t getPrintfFunction();
+crash_handler::Printf_t getPrintfFunction();
 
 // First call returns true, all the following calls return false.
 bool OnlyOnce();
@@ -39,7 +32,7 @@ bool OnlyOnce();
 }; // namespace test
 }; // namespace gwp_asan
 
-class DefaultGuardedPoolAllocator : public Test {
+class DefaultGuardedPoolAllocator : public ::testing::Test {
 public:
   void SetUp() override {
     gwp_asan::options::Options Opts;
@@ -58,7 +51,7 @@ protected:
       MaxSimultaneousAllocations;
 };
 
-class CustomGuardedPoolAllocator : public Test {
+class CustomGuardedPoolAllocator : public ::testing::Test {
 public:
   void
   InitNumSlots(decltype(gwp_asan::options::Options::MaxSimultaneousAllocations)
@@ -81,25 +74,24 @@ protected:
       MaxSimultaneousAllocations;
 };
 
-class BacktraceGuardedPoolAllocator : public Test {
+class BacktraceGuardedPoolAllocator : public ::testing::Test {
 public:
   void SetUp() override {
     gwp_asan::options::Options Opts;
     Opts.setDefaults();
 
-    Opts.Backtrace = gwp_asan::backtrace::getBacktraceFunction();
+    Opts.Backtrace = gwp_asan::options::getBacktraceFunction();
     Opts.InstallForkHandlers = gwp_asan::test::OnlyOnce();
     GPA.init(Opts);
 
-    gwp_asan::segv_handler::installSignalHandlers(
+    gwp_asan::crash_handler::installSignalHandlers(
         &GPA, gwp_asan::test::getPrintfFunction(),
-        gwp_asan::backtrace::getPrintBacktraceFunction(),
-        gwp_asan::backtrace::getSegvBacktraceFunction());
+        gwp_asan::options::getPrintBacktraceFunction(), Opts.Backtrace);
   }
 
   void TearDown() override {
     GPA.uninitTestOnly();
-    gwp_asan::segv_handler::uninstallSignalHandlers();
+    gwp_asan::crash_handler::uninstallSignalHandlers();
   }
 
 protected:

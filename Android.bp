@@ -95,12 +95,6 @@ cc_library_headers {
         // in the platform side.
         "//apex_available:platform",
         "com.android.runtime",
-        // GWP-ASan headers are currently referenced by the following additional APEXes
-        "com.android.art",
-        "com.android.art.debug",
-        "com.android.media",
-        "com.android.media.swcodec",
-        "com.android.virt",
     ],
 }
 

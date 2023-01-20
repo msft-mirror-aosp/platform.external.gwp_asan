@@ -133,9 +133,9 @@ cc_library_static {
 
 // GWP-ASan crash handler API. Provides all the tools you need to symbolize a
 // GWP-ASan crash.
-cc_library {
+cc_library_static {
     name: "gwp_asan_crash_handler",
-    defaults: ["gwp_asan_defaults"],
+    defaults: ["gwp_asan_no_libs_defaults"],
     header_libs: [
         "gwp_asan_headers",
     ],

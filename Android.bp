@@ -206,6 +206,7 @@ cc_test {
         "gwp_asan/tests/iterate.cpp",
         "gwp_asan/tests/late_init.cpp",
         "gwp_asan/tests/mutex_test.cpp",
+        "gwp_asan/tests/never_allocated.cpp",
         "gwp_asan/tests/recoverable.cpp",
         "gwp_asan/tests/options.cpp",
         "gwp_asan/tests/slot_reuse.cpp",

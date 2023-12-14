@@ -114,11 +114,6 @@ cc_library_static {
         "gwp_asan/platform_specific/utilities_posix.cpp",
         "gwp_asan/stack_trace_compressor.cpp",
     ],
-    // GWP-ASan requires platform (non-emulated) TLS. We use thread local
-    // variables in the core, inlined interface to GWP-ASan.
-    cflags: [
-        "-fno-emulated-tls",
-    ],
     apex_available: [
         // Required to not occlude the default platform variation from being
         // skipped by the apex mutator. If this happens - the license file for

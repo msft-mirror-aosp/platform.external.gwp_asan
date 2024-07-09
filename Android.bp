@@ -107,6 +107,7 @@ cc_library_static {
     ],
     srcs: [
         "gwp_asan/common.cpp",
+        "gwp_asan/crash_handler.cpp", // for __gwp_asan_error_is_mine in libc().
         "gwp_asan/guarded_pool_allocator.cpp",
         "gwp_asan/platform_specific/common_posix.cpp",
         "gwp_asan/platform_specific/guarded_pool_allocator_posix.cpp",
@@ -175,6 +176,7 @@ cc_test {
         "liblog",
         "libunwindstack_no_dex",
         "liblzma", // Dependency from libunwindstack.
+        "libz", // Dependency from libunwindstack.
     ],
     shared_libs: [
         "libbase",
